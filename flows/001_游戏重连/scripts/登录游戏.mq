@@ -1,0 +1,111 @@
+﻿Function 点击QQ授权坐标(X, Y, 动作名)
+    Dim 前台包名
+    点击QQ授权坐标 = False
+    If 登录是否超时() Then
+        Exit Function
+    End If
+    前台包名 = Sys.GetFront()
+    // 授权图色可在QQ原生页面和游戏内授权网页中出现。
+    If 前台包名 <> 游戏包名 And 前台包名 <> "com.tencent.mobileqq" Then
+        Exit Function
+    End If
+    If X < 0 Or X >= 720 Or Y < 0 Or Y >= 1280 Then
+        Exit Function
+    End If
+    ReleaseCapture
+    Tap X, Y
+    大厅连续帧 = 0
+    上次点击时间 = TickCount()
+    Call 写日志("QQ授权操作：" & 动作名 & "，坐标=" & X & "," & Y)
+    Delay 1000
+    点击QQ授权坐标 = True
+End Function
+
+Function 处理QQ授权()
+    Dim 前台包名, 锚点X, 锚点Y
+    处理QQ授权 = False
+    前台包名 = Sys.GetFront()
+    If 前台包名 <> 游戏包名 And 前台包名 <> "com.tencent.mobileqq" Then
+        Exit Function
+    End If
+    ReleaseCapture
+    // root.793：QQ授权登录、VIP信息确定、同意/拒绝三个分支。
+    If 查找图色("QQ授权登录一") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "授权登录")
+    ElseIf 查找图色("QQ授权登录二") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "授权登录或确认")
+    ElseIf 查找图色("QQ授权确认") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "确认QQ授权信息")
+    ElseIf 查找图色("QQ授权同意") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "同意QQ授权")
+    ElseIf 查找图色("QQ一键登录") Then
+        // root.793：先点(x-151,y+86)，等1秒，再点(x+63,y)。
+        锚点X = 命中X
+        锚点Y = 命中Y
+        If 点击QQ授权坐标(锚点X - 151, 锚点Y + 86, "一键登录协议") Then
+            处理QQ授权 = 点击QQ授权坐标(锚点X + 63, 锚点Y, "QQ一键登录")
+        End If
+    ElseIf 查找图色("QQ旧版授权一") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "QQ授权继续一")
+    ElseIf 查找图色("QQ旧版授权二") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "QQ授权继续二")
+    ElseIf 查找图色("QQ旧版授权三") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "QQ授权继续三")
+    End If
+End Function
+
+Function 登录游戏()
+    Dim 协议尝试
+    登录游戏 = 任务超时
+    协议尝试 = 0
+    Call 开始登录计时()
+    Call 开始操作阶段("处理登录、QQ授权与公告")
+    Do
+        // 只有大厅成功或统一期限耗尽才退出；前台切换不返回失败。
+        If 确认当前在大厅() Then
+            登录计时中 = False
+            Call 标记操作进展("登录结束，大厅已确认")
+            登录游戏 = 任务成功
+            Exit Function
+        End If
+        If 登录是否超时() Then
+            Call 写日志("登录到大厅超时，尚未确认主页；交给顶层重启恢复")
+            Exit Function
+        End If
+        If 处理QQ授权() Then
+            Call 提示登录等待("已处理QQ授权按钮，等待页面返回")
+        ElseIf 游戏位于前台() Then
+            If 处理已知弹窗() Then
+                Call 提示登录等待("处理游戏公告和活动弹窗")
+            ElseIf 查找图色("QQ登录页") Then
+                If 查找图色("协议已选") Then
+                    If 点击匹配图色("QQ登录页", "QQ登录") Then
+                        Call 提示登录等待("已点击QQ登录，等待授权")
+                        Delay 1500
+                    End If
+                ElseIf 协议尝试 < 1 Then
+                    If 点击游戏坐标(45, 1150, "勾选QQ登录协议") Then
+                        协议尝试 = 协议尝试 + 1
+                        Delay 1000
+                    End If
+                Else
+                    Call 提示登录等待("等待登录协议选中，尚未到登录超时")
+                End If
+            ElseIf 点击匹配图色("开始游戏", "开始游戏，使用当前已选区服") Then
+                Call 提示登录等待("进入当前区服，等待大厅")
+                Delay 1500
+            ElseIf 识别绿色返回箭头() Then
+                // 不调用受普通操作超时约束的公共返回流程。
+                If 点击游戏坐标(命中X, 命中Y, "登录过程返回主页") Then
+                    Call 提示登录等待("已点击返回，继续等待主页")
+                End If
+            Else
+                Call 提示登录等待("等待游戏加载或页面识别")
+            End If
+        Else
+            // 未识别的授权网页/确认页也等待，不因包名切换而失败。
+            Call 提示登录等待("等待QQ授权或返回游戏，未确认主页")
+        End If
+        Delay 500
+    Loop
+End Function

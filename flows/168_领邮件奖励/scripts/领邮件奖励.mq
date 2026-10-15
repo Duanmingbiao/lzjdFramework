@@ -1,0 +1,116 @@
+﻿Function 进入邮件页面()
+    Dim 起点, 入口已点, 上次入口时间
+    进入邮件页面 = 任务失败
+    If Not 等待确认大厅() Then
+        Exit Function
+    End If
+    Call 开始操作阶段("进入邮件页面")
+    起点 = TickCount()
+    入口已点 = 0
+    上次入口时间 = -3000
+    Do
+        If Not 游戏位于前台() Then
+            Exit Function
+        End If
+        If 识别邮件页面() Then
+            Call 标记操作进展("邮件页面已确认")
+            进入邮件页面 = 任务成功
+            Exit Function
+        End If
+        If 处理已知弹窗() Then
+            Call 观察到页面("邮件入口弹窗")
+        ElseIf 点击匹配图色("低客户端提示", "关闭低客户端提示") Then
+            Call 观察到页面("低客户端提示")
+        ElseIf 大厅当前帧成立() And 入口已点 < 3 Then
+            If TickCount() - 上次入口时间 > 2500 Then
+                // V5.510 root.728入口坐标，仅在大厅已确认时使用。
+                If 点击游戏坐标(25, 830, "打开邮件入口") Then
+                    入口已点 = 入口已点 + 1
+                    上次入口时间 = TickCount()
+                End If
+            End If
+        End If
+        If 操作是否超时() Or TickCount() - 起点 > 180000 Then
+            进入邮件页面 = 任务超时
+            Exit Function
+        End If
+        Delay 500
+    Loop
+End Function
+
+Function 领取邮件奖励()
+    Dim 起点, 空状态连续帧, 当前可领, 当前为空, 按钮X, 按钮Y
+    领取邮件奖励 = 任务失败
+    空状态连续帧 = 0
+    起点 = TickCount()
+    Call 开始操作阶段("检查邮件奖励")
+    Do
+        If Not 游戏位于前台() Then
+            Exit Function
+        End If
+        ReleaseCapture
+        KeepCapture
+        当前可领 = 查找图色("邮件可领一")
+        If Not 当前可领 Then
+            当前可领 = 查找图色("邮件可领二")
+        End If
+        按钮X = 命中X + 319
+        按钮Y = 命中Y - 90
+        当前为空 = 查找图色("邮件空一") Or 查找图色("邮件空二")
+        ReleaseCapture
+        If 处理已知弹窗() Then
+            空状态连续帧 = 0
+            Call 观察到页面("邮件奖励弹窗")
+        ElseIf 当前可领 Then
+            空状态连续帧 = 0
+            Call 观察到页面("邮件可领取")
+            // 锚点来自邮件整页多点模板，禁止单独按橙色像素点击。
+            If 点击游戏坐标(按钮X, 按钮Y, "一键领取邮件奖励") Then
+                邮件领取尝试次数 = 邮件领取尝试次数 + 1
+            End If
+        ElseIf 当前为空 Then
+            空状态连续帧 = 空状态连续帧 + 1
+            Call 观察到页面("邮件已无可领取奖励")
+            If 空状态连续帧 >= 2 Then
+                邮件终态已确认 = True
+                If 邮件领取尝试次数 > 0 Then
+                    邮件终态说明 = "已尝试领取，确认无可领取奖励"
+                Else
+                    邮件终态说明 = "本轮检查无可领取奖励"
+                End If
+                领取邮件奖励 = 任务成功
+                Exit Function
+            End If
+        Else
+            空状态连续帧 = 0
+        End If
+        If 操作是否超时() Or TickCount() - 起点 > 180000 Then
+            领取邮件奖励 = 任务超时
+            Exit Function
+        End If
+        Delay 500
+    Loop
+End Function
+
+Function 执行邮件任务()
+    Dim 结果
+    执行邮件任务 = 任务失败
+    Call 开始邮件记录()
+    结果 = 进入邮件页面()
+    If 结果 <> 任务成功 Then
+        执行邮件任务 = 结果
+        Exit Function
+    End If
+    结果 = 领取邮件奖励()
+    If 结果 <> 任务成功 Then
+        执行邮件任务 = 结果
+        Exit Function
+    End If
+    结果 = 返回大厅()
+    If 结果 <> 任务成功 Then
+        执行邮件任务 = 结果
+        Exit Function
+    End If
+    执行邮件任务 = 任务成功
+End Function
+

@@ -1,0 +1,81 @@
+﻿Function 识别绿色返回箭头()
+    识别绿色返回箭头 = True
+    If 查找图色("绿色返回一") Then
+        Exit Function
+    End If
+    识别绿色返回箭头 = 查找图色("绿色返回二")
+End Function
+
+Function 识别已知遮挡()
+    识别已知遮挡 = 查找图色("获得奖励") Or 查找图色("邮件关闭弹窗") Or 查找图色("关闭一") Or 查找图色("关闭二") Or 查找图色("关闭三") Or 查找图色("我知道了") Or 查找图色("回归公告")
+End Function
+
+Function 大厅当前帧成立()
+    大厅当前帧成立 = False
+    If Not 游戏位于前台() Then
+        Exit Function
+    End If
+    ReleaseCapture
+    KeepCapture
+    // 原版这两组是大厅底部的布局候选，不错误地要求两种样式同时出现。
+    If 查找图色("大厅主体") Or 查找图色("大厅底部") Then
+        If Not 识别绿色返回箭头() And Not 识别已知遮挡() Then
+            大厅当前帧成立 = True
+        End If
+    End If
+    ReleaseCapture
+End Function
+
+Function 确认当前在大厅()
+    确认当前在大厅 = False
+    If TickCount() - 上次大厅帧时间 < 400 Then
+        Exit Function
+    End If
+    上次大厅帧时间 = TickCount()
+    If 大厅当前帧成立() Then
+        大厅连续帧 = 大厅连续帧 + 1
+    Else
+        大厅连续帧 = 0
+    End If
+    确认当前在大厅 = 大厅连续帧 >= 2
+End Function
+
+Function 等待确认大厅()
+    大厅连续帧 = 0
+    上次大厅帧时间 = TickCount() - 500
+    等待确认大厅 = False
+    If 确认当前在大厅() Then
+        等待确认大厅 = True
+        Exit Function
+    End If
+    Delay 500
+    等待确认大厅 = 确认当前在大厅()
+End Function
+
+Function 处理已知弹窗()
+    处理已知弹窗 = False
+    If Not 游戏位于前台() Then
+        Exit Function
+    End If
+    ReleaseCapture
+    If 点击匹配图色("获得奖励", "关闭获得奖励") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("邮件关闭弹窗", "关闭邮件弹窗") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("我知道了", "我知道了") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("回归公告", "关闭回归公告") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("关闭一", "关闭活动弹窗一") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("关闭二", "关闭活动弹窗二") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("关闭三", "关闭活动弹窗三") Then
+        处理已知弹窗 = True
+    End If
+End Function
+
+Function 识别邮件页面()
+    识别邮件页面 = 查找图色("邮件空一") Or 查找图色("邮件空二") Or 查找图色("邮件可领一") Or 查找图色("邮件可领二")
+End Function
+

@@ -1,0 +1,38 @@
+﻿Function 返回大厅()
+    Dim 起点, 箭头存在, 上帧标识
+    返回大厅 = 任务失败
+    起点 = TickCount()
+    上帧标识 = ""
+    大厅连续帧 = 0
+    Call 设置任务状态(2, "返回大厅中")
+    Call 开始操作阶段("返回大厅")
+    Do
+        If Not 游戏是否运行() Or Not 游戏位于前台() Then
+            Exit Function
+        End If
+        If 确认当前在大厅() Then
+            Call 标记操作进展("大厅已连续两帧确认")
+            返回大厅 = 任务成功
+            Exit Function
+        End If
+        If 处理已知弹窗() Then
+            Call 观察到页面("返回过程存在弹窗")
+        Else
+            箭头存在 = 识别绿色返回箭头()
+            If 箭头存在 Then
+                Call 观察到页面("返回箭头可见")
+                If 点击游戏坐标(命中X, 命中Y, "绿色箭头返回") Then
+                    Delay 500
+                End If
+            ElseIf 大厅当前帧成立() Then
+                Call 观察到页面("返回后大厅候选")
+            End If
+        End If
+        If 操作是否超时() Or TickCount() - 起点 > 180000 Then
+            返回大厅 = 任务超时
+            Exit Function
+        End If
+        Delay 500
+    Loop
+End Function
+

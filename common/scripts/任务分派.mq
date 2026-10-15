@@ -1,0 +1,34 @@
+﻿Function 执行指定任务(任务编号)
+    执行指定任务 = 任务失败
+    Select Case 任务编号
+    Case 1
+        执行指定任务 = 执行游戏重连()
+    Case 168
+        执行指定任务 = 执行邮件任务()
+    End Select
+End Function
+
+Sub 恢复未完成任务(失败结果)
+    If 当前任务编号 = 1 Then
+        // 登录只能在统一登录期限耗尽且仍未确认大厅时重启游戏。
+        If Not 登录是否超时() Then
+            Call 提示登录等待("登录尚未超时，继续等待，不重启游戏")
+            Exit Sub
+        End If
+    End If
+    邮件失败次数 = 邮件失败次数 + 1
+    WriteConfig "最小闭环.邮件.失败次数", 邮件失败次数, True
+    WriteConfig "最小闭环.邮件.未完成", True, True
+    WriteConfig "最小闭环.最后失败任务", 当前任务编号, True
+    WriteConfig "最小闭环.最后失败结果", 失败结果, True
+    Call 设置任务状态(6, "未完成，关闭游戏后从入口恢复")
+    Call 写日志("统一恢复；失败结果=" & 失败结果 & "；累计失败=" & 邮件失败次数)
+    ReleaseCapture
+    KillApp 游戏包名
+    Delay 3000
+    登录计时中 = False
+    大厅连续帧 = 0
+    下次邮件时间 = 0
+    // 下一轮先分派重连，再从邮件入口执行；不恢复旧坐标、不递归调用。
+End Sub
+

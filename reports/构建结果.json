@@ -1,0 +1,30 @@
+{
+  "modules": [
+    "app/入口.mq",
+    "common/scripts/常量.mq",
+    "common/scripts/日志.mq",
+    "common/scripts/配置读取.mq",
+    "common/scripts/运行计时.mq",
+    "common/scripts/游戏控制.mq",
+    "common/scripts/点击操作.mq",
+    "common/scripts/图色参数.mq",
+    "common/scripts/页面识别.mq",
+    "common/scripts/返回大厅.mq",
+    "common/scripts/任务状态.mq",
+    "common/scripts/任务分派.mq",
+    "flows/001_游戏重连/scripts/启动游戏.mq",
+    "flows/001_游戏重连/scripts/登录游戏.mq",
+    "flows/001_游戏重连/scripts/游戏重连.mq",
+    "flows/168_领邮件奖励/scripts/领邮件奖励.mq"
+  ],
+  "registeredTasks": [
+    1,
+    168
+  ],
+  "outputs": {
+    "日常任务.mq": "90aa78eae99c9434e319f9699add5b9c3cfb7f760af210e3ad004b4702d5fe0d",
+    "日常任务.uip": "971437d916ce3788f77de8078efe25943bf8b760b80c973aa3083682874c83b0",
+    "最小环境检查.mq": "dddbbdacaa5f6385a3ce85187724621333ee713395403759f554d2ca0a00beb5"
+  },
+  "validation": "source concatenation and strict GBK encoding only; not assistant compilation or device testing"
+}

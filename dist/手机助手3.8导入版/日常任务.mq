@@ -1,0 +1,790 @@
+// Module: app/入口.mq
+// 最小闭环 v0.2：QQ自动授权，登录到大厅使用独立总超时。
+Dim 任务成功, 任务等待, 任务失败, 任务超时
+Dim 游戏包名, 操作超时秒数, 登录超时秒数, 邮件间隔秒数
+Dim 当前阶段, 最后进展时间, 最近页面, 命中X, 命中Y
+Dim 大厅连续帧, 上次大厅帧时间, 下次邮件时间, 邮件失败次数
+Dim 当前任务编号, 当前任务状态, 上次点击时间
+Dim 登录计时中, 登录计时起点, 登录等待原因, 登录提示时间
+Dim 邮件终态已确认, 邮件终态说明, 邮件领取尝试次数
+Dim 本轮结果, 本轮开始时间, 本轮是否已提交, 立即检查邮件
+
+Call 初始化常量()
+Log.Open
+Call 读取运行配置()
+Call 读取任务状态()
+Call 写日志("最小闭环 v0.2 启动；登录到大厅超时=" & 登录超时秒数 & "秒")
+If GetScreenX() <> 720 Or GetScreenY() <> 1280 Then
+    Call 写日志("分辨率不符合：需要720x1280，请调整模拟器后再运行")
+    ShowMessage "请设置为720x1280、320 DPI后重新运行"
+    EndScript
+End If
+If 立即检查邮件 Then
+    下次邮件时间 = 0
+End If
+Do
+    If Time() >= 下次邮件时间 Then
+        当前任务编号 = 1
+        本轮结果 = 执行指定任务(1)
+        If 本轮结果 = 任务成功 Then
+            当前任务编号 = 168
+            本轮结果 = 执行指定任务(168)
+            If 本轮结果 = 任务成功 Then
+                Call 提交邮件完成()
+            ElseIf 本轮结果 <> 任务等待 Then
+                Call 恢复未完成任务(本轮结果)
+            End If
+        ElseIf 本轮结果 <> 任务等待 Then
+            Call 恢复未完成任务(本轮结果)
+        End If
+    Else
+        Call 设置任务状态(4, "邮件等待下一轮")
+    End If
+    Delay 1000
+Loop
+
+
+
+// Module: common/scripts/常量.mq
+// 助手3.8使用已核对的Dim赋值，不依赖未经确认的Const声明。
+Sub 初始化常量()
+    任务成功 = 1
+    任务等待 = 0
+    任务失败 = -1
+    任务超时 = -2
+    游戏包名 = "com.tencent.tmgp.dragonball"
+    当前阶段 = "初始化"
+    最近页面 = ""
+    最后进展时间 = TickCount()
+    登录计时中 = False
+    登录计时起点 = 0
+    登录等待原因 = ""
+    登录提示时间 = -10000
+    上次点击时间 = -3000
+    大厅连续帧 = 0
+    上次大厅帧时间 = -1000
+    当前任务状态 = -1
+    本轮是否已提交 = False
+    邮件终态已确认 = False
+End Sub
+
+
+
+// Module: common/scripts/日志.mq
+Sub 写日志(内容)
+    TracePrint Time() & " | 任务=" & 当前任务编号 & " | " & 内容
+End Sub
+
+
+
+// Module: common/scripts/配置读取.mq
+Sub 读取运行配置()
+    操作超时秒数 = 读取范围数字("操作超时秒数", 120, 30, 600)
+    登录超时秒数 = 读取范围数字("登录超时秒数", 600, 30, 3600)
+    邮件间隔秒数 = 读取范围数字("邮件间隔秒数", 21600, 30, 86400)
+    立即检查邮件 = ReadUIConfig("立即检查邮件", False)
+End Sub
+
+Function 读取范围数字(配置名, 默认值, 最小值, 最大值)
+    Dim 原值, 数值
+    原值 = CDbl(ReadUIConfig(配置名, 默认值))
+    数值 = 默认值
+    If IsNumeric(原值) Then
+        数值 = Int(CDbl(原值))
+    End If
+    If 数值 < 最小值 Then
+        数值 = 最小值
+    End If
+    If 数值 > 最大值 Then
+        数值 = 最大值
+    End If
+    读取范围数字 = 数值
+End Function
+
+
+
+// Module: common/scripts/运行计时.mq
+Sub 开始操作阶段(阶段)
+    最近页面 = ""
+    Call 标记操作进展(阶段)
+End Sub
+
+Sub 标记操作进展(阶段)
+    当前阶段 = 阶段
+    最后进展时间 = TickCount()
+    Call 写日志(阶段)
+    WriteConfig "最小闭环.当前阶段", 阶段, True
+End Sub
+
+Sub 观察到页面(页面名)
+    If 最近页面 <> 页面名 Then
+        最近页面 = 页面名
+        Call 标记操作进展("识别页面：" & 页面名)
+    End If
+End Sub
+
+Function 操作是否超时()
+    操作是否超时 = TickCount() - 最后进展时间 > 操作超时秒数 * 1000
+End Function
+
+Sub 开始登录计时()
+    // 一个重连周期只起算一次，切换QQ、确认页、游戏都不重新起算。
+    If Not 登录计时中 Then
+        登录计时中 = True
+        登录计时起点 = TickCount()
+        登录等待原因 = ""
+        登录提示时间 = TickCount() - 10000
+        Call 写日志("开始登录计时，直到确认大厅；上限=" & 登录超时秒数 & "秒")
+    End If
+End Sub
+
+Function 登录是否超时()
+    登录是否超时 = False
+    If 登录计时中 Then
+        登录是否超时 = TickCount() - 登录计时起点 >= 登录超时秒数 * 1000
+    End If
+End Function
+
+Sub 提示登录等待(原因)
+    Dim 已用秒数
+    If 原因 <> 登录等待原因 Or TickCount() - 登录提示时间 >= 10000 Then
+        登录等待原因 = 原因
+        登录提示时间 = TickCount()
+        已用秒数 = Int((TickCount() - 登录计时起点) / 1000)
+        Call 写日志(原因 & "；登录已用=" & 已用秒数 & "秒/" & 登录超时秒数 & "秒；前台=" & Sys.GetFront())
+    End If
+End Sub
+
+
+
+// Module: common/scripts/游戏控制.mq
+Function 游戏是否运行()
+    游戏是否运行 = Sys.IsRunning(游戏包名)
+End Function
+
+Function 游戏位于前台()
+    游戏位于前台 = Sys.AppIsFront(游戏包名)
+End Function
+
+Function 正在外部授权()
+    Dim 前台包名
+    前台包名 = Sys.GetFront()
+    正在外部授权 = 前台包名 = "com.tencent.mobileqq" Or 前台包名 = "com.tencent.mm"
+End Function
+
+
+
+// Module: common/scripts/点击操作.mq
+Function 点击游戏坐标(X, Y, 动作名)
+    点击游戏坐标 = False
+    If Not 游戏位于前台() Then
+        Exit Function
+    End If
+    If X < 0 Or X >= 720 Or Y < 0 Or Y >= 1280 Then
+        Call 写日志("拒绝越界点击：" & 动作名)
+        Exit Function
+    End If
+    If TickCount() - 上次点击时间 < 800 Then
+        Exit Function
+    End If
+    ReleaseCapture
+    Tap X, Y
+    上次点击时间 = TickCount()
+    大厅连续帧 = 0
+    Call 写日志("尝试点击：" & 动作名 & "，坐标=" & X & "," & Y)
+    // 点击不等于进展；由后续页面改变来重置计时，避免卡住时一直续时。
+    Delay 500
+    点击游戏坐标 = True
+End Function
+
+Function 点击匹配图色(图色名, 动作名)
+    点击匹配图色 = False
+    If 查找图色(图色名) Then
+        点击匹配图色 = 点击游戏坐标(命中X, 命中Y, 动作名)
+    End If
+End Function
+
+
+
+// Module: common/scripts/图色参数.mq
+// Original V5.510 color parameters; current game UI requires device testing.
+Function 查找图色(图色名称)
+    命中X = -1
+    命中Y = -1
+    Select Case 图色名称
+    Case "大厅主体"
+        // Evidence: root-784_L107
+        FindMultiColor 0,0,0,0,"FFFFFF-333333","6|-52|424542-333333,2|-50|353535-333333,-33|-20|080808-333333,-12|21|F7F3F1-333333,-15|22|673617-333333,41|-2|080808-333333,41|21|BF6627-333333,-31|19|E79653-333333,0|44|E5A93D-333333",0,0.9,命中X,命中Y
+    Case "大厅底部"
+        // Evidence: root-784_L118
+        FindMultiColor 6,1133,153,1279,"FFFFFF-101010","-18|-4|FFFFFF-101010,-4|-19|080808-101010,-28|20|F7F2EF-101010,-8|-22|3E423E-101010,-42|-41|080808-101010,-11|-50|424542-101010,-35|-50|424542-101010,23|-17|292C29-101010,-44|0|010C4A-101010",0,0.9,命中X,命中Y
+    Case "绿色返回一"
+        // Evidence: root-784_L172
+        FindMultiColor 0,0,0,0,"166748-333333","-1|-11|B9CEC3-333333,21|-14|648D7F-333333,-6|11|085942-333333,14|11|ADCAAB-333333,-23|17|13945A-333333,-22|14|008239-333333,-22|-11|8FF6EF-333333,10|21|D6FFFF-333333,10|3|E1E1D3-333333",0,0.9,命中X,命中Y
+    Case "绿色返回二"
+        // Evidence: root-784_L222
+        FindMultiColor 0,0,0,0,"1D714F-333333","-25|-9|81EFE4-333333,-20|-4|54D7B7-333333,-20|-18|7BF3E7-333333,-10|-20|D9FCFD-333333,-42|15|18B673-333333,-31|16|088E52-333333,8|21|C6FCF7-333333,49|5|30BE84-333333,31|-3|46CDA9-333333",0,0.9,命中X,命中Y
+    Case "关闭一"
+        // Evidence: root-784_L185
+        FindMultiColor 490,110,703,436,"F9E0A7-202020","10|-12|FEF8E8-202020,13|-18|FEFEFC-202020,21|-18|FFFFFB-202020,-15|-18|FFFFFE-202020,10|19|F1BF5C-202020,16|19|F3BF5C-202020,9|12|F9C875-202020,14|19|F9BF5C-202020,-14|13|F5D37E-202020,5|9|F8CF7E-202020,5|7|F9D086-202020",1,0.92,命中X,命中Y
+    Case "关闭二"
+        // Evidence: root-784_L198
+        FindMultiColor 490,110,703,436,"F9E0A7-202020","10|-12|FEF8E8-202020,13|-18|FEFEFC-202020,21|-18|FFFFFB-202020,-15|-18|FFFFFE-202020,10|19|F1BF5C-202020,16|19|F3BF5C-202020,9|12|F9C875-202020,14|19|F9BF5C-202020,-14|13|F5D37E-202020,5|9|F8CF7E-202020,5|7|F9D086-202020",1,0.92,命中X,命中Y
+    Case "关闭三"
+        // Evidence: root-784_L211
+        FindMultiColor 490,110,703,436,"F9E0A7-202020","10|-12|FEF8E8-202020,13|-18|FEFEFC-202020,21|-18|FFFFFB-202020,-15|-18|FFFFFE-202020,10|19|F1BF5C-202020,16|19|F3BF5C-202020,9|12|F9C875-202020,14|19|F9BF5C-202020,-14|13|F5D37E-202020,5|9|F8CF7E-202020,5|7|F9D086-202020",1,0.92,命中X,命中Y
+    Case "我知道了"
+        // Evidence: root-793_L160
+        FindMultiColor 0,0,0,0,"4AE1FF-101010","-90|-6|18A7FF-101010,-76|-5|1193F9-101010,-59|3|FFFFFF-101010,-46|1|FFFFFF-101010,-25|1|FFFFFF-101010,8|2|FFFFFF-101010,18|1|FFFFFF-101010,60|2|E0E7F0-101010,106|10|14ACFB-101010",0,0.9,命中X,命中Y
+    Case "回归公告"
+        // Evidence: root-793_L200
+        FindMultiColor 0,0,0,0,"73F1FF-101010","-169|-583|7DD8FF-101010,188|-645|FFFFFF-101010,174|110|4069A3-101010,20|11|FFFFFF-101010,-75|42|026DF9-101010,-290|24|2F4871-101010,-305|17|40699A-101010,-103|-4|96541A-101010,-57|-10|4F2A0E-101010",0,0.9,命中X,命中Y
+    Case "开始游戏"
+        // Evidence: root-793_L240
+        FindMultiColor 0,0,0,0,"0C40B9-333333","-93|-21|084DB5-333333,-90|-17|F7FFFF-333333,7|-23|0065BD-333333,10|-17|F7FFFF-333333,66|-19|085DCE-333333,65|-14|F1FBFF-333333,-135|-11|29D3FF-333333,-108|-32|168CFE-333333,-2|45|D0F9F9-333333",0,0.9,命中X,命中Y
+    Case "QQ登录页"
+        // Evidence: root-793_L336
+        FindMultiColor 1,1026,717,1126,"FFFFFF-202020","-2|-9|072AFF-202020,-27|4|964402-202020,-19|-39|EA7F1C-202020,-30|-15|DB9136-202020,155|13|99570D-202020,-9|-3|0127FD-202020,-12|-20|271F1F-202020,9|-22|271F1F-202020,-1|-31|271F1F-202020,-1|-8|022BFF-202020",1,0.9,命中X,命中Y
+    Case "协议已选"
+        // Evidence: root-793_L807
+        FindMultiColor 0,1091,101,1236,"3BFF23-202020","18|-23|3BFF23-202020,18|-18|3BFF23-202020,-7|-8|3BFF23-202020,1|14|FFFFFF-202020,-16|-5|000F00-202020,-16|-4|000F00-202020,24|-13|002A00-202020,2|14|FFFFFF-202020,2|9|0B6E03-202020",0,0.9,命中X,命中Y
+    Case "邮件空一"
+        // Evidence: function-728_L290
+        FindMultiColor 0,0,0,0,"D7F0E8-101010","-14|13|739589-101010,0|14|3CC69C-101010,266|-114|EAEAEA-101010,324|-103|D2D2D2-101010,-67|-150|845131-101010,-76|-159|845131-101010,-65|-1069|39498C-101010,200|-1036|424D6B-101010,-32|-1000|2C2213-101010",1,0.9,命中X,命中Y
+    Case "邮件空二"
+        // Evidence: function-728_L316
+        FindMultiColor 0,0,0,0,"D7F0E8-101010","-14|13|739589-101010,1|15|39BE94-101010,109|-113|8CF7E7-101010,-60|-1069|39498C-101010,-76|-1062|394584-101010,-40|-140|211C10-101010,-60|-150|845131-101010,393|-112|E9E9E9-101010,471|-85|ABABAB-101010",1,0.9,命中X,命中Y
+    Case "邮件可领一"
+        // Evidence: function-728_L450
+        FindMultiColor 0,0,0,0,"D7F0E8-101010","-14|13|739589-101010,1|15|39BE94-101010,98|-140|211C10-101010,-60|-1069|39498C-101010,-76|-1062|394584-101010,-40|-140|211C10-101010,-60|-150|845131-101010,248|-110|73F3FF-101010,325|-76|088EFF-101010",1,0.9,命中X,命中Y
+    Case "邮件可领二"
+        // Evidence: function-728_L476
+        FindMultiColor 0,0,0,0,"D7F0E8-101010","-14|13|739589-101010,1|15|39BE94-101010,109|-113|8CF7E7-101010,-60|-1069|39498C-101010,-76|-1062|394584-101010,-40|-140|211C10-101010,-60|-150|845131-101010,393|-112|75F4FF-101010,471|-85|0F9EFF-101010",1,0.9,命中X,命中Y
+    Case "获得奖励"
+        // Evidence: function-728_L714
+        FindMultiColor 0,0,0,0,"00003A-101010","-39|-30|27F5FD-101010,258|-32|2BF9FF-101010,255|0|099DFE-101010,191|-34|00003A-101010,81|-24|00003A-101010,71|-20|20DBFE-101010,44|12|00003A-101010,8|-16|00003A-101010,65|-54|00003A-101010",1,0.9,命中X,命中Y
+    Case "邮件关闭弹窗"
+        // Evidence: function-728_L786
+        FindMultiColor 0,0,0,0,"FFE3A5-101010","13|21|CB8239-101010,17|22|9C5519-101010,-581|32|496287-101010,-628|40|814B28-101010,-619|652|8C5129-101010,-15|649|523021-101010,-501|515|96604B-101010,-549|913|3D4442-101010,-563|926|202A27-101010",1,0.9,命中X,命中Y
+    Case "低客户端提示"
+        // Evidence: function-728_L198
+        FindMultiColor 0,0,0,0,"0698FE-101010","-13|-24|FFFFFF-101010,18|-27|FFFFFF-101010,50|-21|23BFFF-101010,-188|-17|96543B-101010,167|-22|96543B-101010,0|-153|5B3328-101010,-254|426|454848-101010,-311|453|0A220F-101010,-232|-725|19100B-101010",1,0.9,命中X,命中Y
+    Case "QQ授权登录一"
+        // Evidence: root-793_L3947
+        FindMultiColor 0,0,720,1280,"FF9900-101010","-62|5|FF9900-101010,-55|95|FFFFFF-101010,109|45|FFFFFF-101010,109|40|FF9900-101010,109|261|FFFFFF-101010,105|185|FFFFFF-101010,84|42|FF9900-101010,102|-45|FF9900-101010,278|-2|FFFFFF-101010",0,0.9,命中X,命中Y
+    Case "QQ授权登录二"
+        // Evidence: root-793_L3961
+        FindMultiColor 9,932,718,1272,"FF9900-101010","3|-15|FFFFFF-101010,-142|3|FFFFFF-101010,-140|3|FF9900-101010,-86|5|FF9900-101010,-10|16|FFFFFF-101010,6|81|FFFFFF-101010,15|176|FFFFFF-101010,148|-1|FF9900-101010,148|37|FF9900-101010",0,0.9,命中X,命中Y
+    Case "QQ授权确认"
+        // Evidence: root-793_L4012
+        FindMultiColor 50,283,691,1096,"FFFFFF","18|6|FFFFFF,35|10|FFFFFF,19|49|FF9900,-118|10|FF9900,23|-27|FF9900,176|11|FF9900,28|-36|FFFFFF,-138|6|FFFFFF,29|55|FFFFFF,22|55|FFFFFF,14|-127|FFFFFF,-267|-713|1E1C1A,-78|-722|1E1C1A,43|-690|1E1C1A,7|-691|1E1C1A,-208|-691|1E1C1A,-278|-703|FFFFFF,-300|-926|1A0803,-300|-926|1A0803",0,0.88,命中X,命中Y
+    Case "QQ授权同意"
+        // Evidence: root-793_L4079
+        FindMultiColor 0,0,720,1279,"FF9900-101010","3|72|CCCCCC-101010,0|-41|FFFFFF-101010,-168|94|FFFFFF-101010,-167|94|CCCCCC-101010,-323|-906|1A0803-101010,-317|-906|FFFFFF-101010,158|-3|FF9900-101010,169|-3|FFFFFF-101010,167|115|CCCCCC-101010",0,0.9,命中X,命中Y
+    Case "QQ一键登录"
+        // Evidence: root-793_L1051
+        FindMultiColor 82,596,683,867,"FFFFFF","25|1|FFFFFF,18|0|FFFFFF,95|-11|FFFFFF,113|-10|FFFFFF,94|0|FFFFFF,86|14|FFFFFF,61|13|FFFFFF,102|-6|FFFFFF,92|-5|FF9900,61|21|FF9900,12|-7|FF9900,11|6|FF9900,59|7|FF9900,53|14|FFFFFF,52|54|F7F3F3,49|120|F7F3F3,284|-3|F7F3F3,-189|4|F7F3F3,-151|-3|FF9900,250|-4|FF9900,-151|-4|FF9900",0,0.95,命中X,命中Y
+    Case "QQ旧版授权一"
+        // Evidence: root-793_L896
+        FindMultiColor 9,932,718,1272,"FFFFFF","-76|-48|FF9900,67|-122|FF9900,71|-125|FFFFFF,-217|-117|FF9900,-222|-125|FFFFFF,-96|-126|FF9900,-94|-131|FFFFFF,-112|-88|FF9900,-40|-87|FF9900,-90|-84|FF9900,-89|-103|FF9900,86|-88|FFFFFF,-281|-85|FFFFFF,201|-1031|F4ECEF,207|-1027|FFFFFF,239|-1016|FFFFFF,239|-1026|FFFFFF,247|-1032|F9F6F7",0,0.9,命中X,命中Y
+    Case "QQ旧版授权二"
+        // Evidence: root-793_L967
+        FindMultiColor 9,932,718,1272,"FFFFFF","96|-6|E5772D,79|0|E5772D,-62|-122|FF9900,-83|-51|FFFFFF,-80|-124|FFFFFF,208|-118|FF9900,212|-121|FFFFFF,212|-51|FFFFFF,207|-56|FF9900,49|-97|FFFFFF,80|-72|FFFAF3,339|-1027|FFFFFF,392|-1019|FFFFFF,379|-1019|FFFFFF,386|-1026|FFFFFF,62|-87|FFFFFF,62|-49|FF9900,67|-125|FF9900,67|-131|FFFFFF",0,0.9,命中X,命中Y
+    Case "QQ旧版授权三"
+        // Evidence: root-793_L1111
+        FindMultiColor 9,932,718,1272,"FFFFFF-101010","64|-49|FF9900-101010,-88|-123|FF9900-101010,-93|-114|FFFFFF-101010,212|-80|FFFFFF-101010,208|-80|FF9900-101010,44|-100|FFFFFF-101010,58|-129|FFFFFF-101010,54|-45|FFFFFF-101010,55|-60|FF9900-101010",0,0.9,命中X,命中Y
+    End Select
+    查找图色 = 命中X >= 0 And 命中Y >= 0
+End Function
+
+
+// Module: common/scripts/页面识别.mq
+Function 识别绿色返回箭头()
+    识别绿色返回箭头 = True
+    If 查找图色("绿色返回一") Then
+        Exit Function
+    End If
+    识别绿色返回箭头 = 查找图色("绿色返回二")
+End Function
+
+Function 识别已知遮挡()
+    识别已知遮挡 = 查找图色("获得奖励") Or 查找图色("邮件关闭弹窗") Or 查找图色("关闭一") Or 查找图色("关闭二") Or 查找图色("关闭三") Or 查找图色("我知道了") Or 查找图色("回归公告")
+End Function
+
+Function 大厅当前帧成立()
+    大厅当前帧成立 = False
+    If Not 游戏位于前台() Then
+        Exit Function
+    End If
+    ReleaseCapture
+    KeepCapture
+    // 原版这两组是大厅底部的布局候选，不错误地要求两种样式同时出现。
+    If 查找图色("大厅主体") Or 查找图色("大厅底部") Then
+        If Not 识别绿色返回箭头() And Not 识别已知遮挡() Then
+            大厅当前帧成立 = True
+        End If
+    End If
+    ReleaseCapture
+End Function
+
+Function 确认当前在大厅()
+    确认当前在大厅 = False
+    If TickCount() - 上次大厅帧时间 < 400 Then
+        Exit Function
+    End If
+    上次大厅帧时间 = TickCount()
+    If 大厅当前帧成立() Then
+        大厅连续帧 = 大厅连续帧 + 1
+    Else
+        大厅连续帧 = 0
+    End If
+    确认当前在大厅 = 大厅连续帧 >= 2
+End Function
+
+Function 等待确认大厅()
+    大厅连续帧 = 0
+    上次大厅帧时间 = TickCount() - 500
+    等待确认大厅 = False
+    If 确认当前在大厅() Then
+        等待确认大厅 = True
+        Exit Function
+    End If
+    Delay 500
+    等待确认大厅 = 确认当前在大厅()
+End Function
+
+Function 处理已知弹窗()
+    处理已知弹窗 = False
+    If Not 游戏位于前台() Then
+        Exit Function
+    End If
+    ReleaseCapture
+    If 点击匹配图色("获得奖励", "关闭获得奖励") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("邮件关闭弹窗", "关闭邮件弹窗") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("我知道了", "我知道了") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("回归公告", "关闭回归公告") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("关闭一", "关闭活动弹窗一") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("关闭二", "关闭活动弹窗二") Then
+        处理已知弹窗 = True
+    ElseIf 点击匹配图色("关闭三", "关闭活动弹窗三") Then
+        处理已知弹窗 = True
+    End If
+End Function
+
+Function 识别邮件页面()
+    识别邮件页面 = 查找图色("邮件空一") Or 查找图色("邮件空二") Or 查找图色("邮件可领一") Or 查找图色("邮件可领二")
+End Function
+
+
+
+// Module: common/scripts/返回大厅.mq
+Function 返回大厅()
+    Dim 起点, 箭头存在, 上帧标识
+    返回大厅 = 任务失败
+    起点 = TickCount()
+    上帧标识 = ""
+    大厅连续帧 = 0
+    Call 设置任务状态(2, "返回大厅中")
+    Call 开始操作阶段("返回大厅")
+    Do
+        If Not 游戏是否运行() Or Not 游戏位于前台() Then
+            Exit Function
+        End If
+        If 确认当前在大厅() Then
+            Call 标记操作进展("大厅已连续两帧确认")
+            返回大厅 = 任务成功
+            Exit Function
+        End If
+        If 处理已知弹窗() Then
+            Call 观察到页面("返回过程存在弹窗")
+        Else
+            箭头存在 = 识别绿色返回箭头()
+            If 箭头存在 Then
+                Call 观察到页面("返回箭头可见")
+                If 点击游戏坐标(命中X, 命中Y, "绿色箭头返回") Then
+                    Delay 500
+                End If
+            ElseIf 大厅当前帧成立() Then
+                Call 观察到页面("返回后大厅候选")
+            End If
+        End If
+        If 操作是否超时() Or TickCount() - 起点 > 180000 Then
+            返回大厅 = 任务超时
+            Exit Function
+        End If
+        Delay 500
+    Loop
+End Function
+
+
+
+// Module: common/scripts/任务状态.mq
+Sub 读取任务状态()
+    下次邮件时间 = 0
+    邮件失败次数 = ReadConfig("最小闭环.邮件.失败次数", 0)
+    If ReadConfig("最小闭环.邮件.提交有效", False) Then
+        下次邮件时间 = ReadConfig("最小闭环.邮件.下次执行时间", 0)
+    End If
+    If ReadConfig("最小闭环.邮件.未完成", False) Then
+        下次邮件时间 = 0
+        Call 写日志("恢复上次未完成邮件，从任务入口重新执行")
+    End If
+End Sub
+
+Sub 设置任务状态(新状态, 描述)
+    If 当前任务状态 <> 新状态 Then
+        当前任务状态 = 新状态
+        Call 写日志("状态=" & 新状态 & "，" & 描述)
+        WriteConfig "最小闭环.当前任务编号", 当前任务编号, True
+        WriteConfig "最小闭环.当前状态", 新状态, True
+        WriteConfig "最小闭环.当前阶段", 描述, True
+    End If
+End Sub
+
+Sub 开始邮件记录()
+    本轮开始时间 = Time()
+    本轮是否已提交 = False
+    邮件终态已确认 = False
+    邮件终态说明 = ""
+    邮件领取尝试次数 = 0
+    WriteConfig "最小闭环.邮件.未完成", True, True
+    WriteConfig "最小闭环.邮件.最后开始时间", 本轮开始时间, True
+    WriteConfig "最小闭环.邮件.是否启用", True, True
+    Call 设置任务状态(1, "邮件执行中")
+End Sub
+
+Sub 提交邮件完成()
+    Dim 已完成次数
+    // 成功返回值之外再检查终态与大厅，禁止在领取点击后提前提交。
+    If Not 邮件终态已确认 Or 本轮是否已提交 Then
+        Exit Sub
+    End If
+    If Not 等待确认大厅() Then
+        Call 恢复未完成任务(任务失败)
+        Exit Sub
+    End If
+    下次邮件时间 = Time() + 邮件间隔秒数
+    已完成次数 = ReadConfig("最小闭环.邮件.完成轮次", 0) + 1
+    WriteConfig "最小闭环.邮件.提交有效", False, True
+    WriteConfig "最小闭环.邮件.任务编号", 168, True
+    WriteConfig "最小闭环.邮件.所属日期", Date(), True
+    WriteConfig "最小闭环.邮件.最后完成时间", Time(), True
+    WriteConfig "最小闭环.邮件.下次执行时间", 下次邮件时间, True
+    WriteConfig "最小闭环.邮件.完成轮次", 已完成次数, True
+    WriteConfig "最小闭环.邮件.终态", 邮件终态说明, True
+    WriteConfig "最小闭环.邮件.领取尝试次数", 邮件领取尝试次数, True
+    WriteConfig "最小闭环.邮件.未完成", False, True
+    WriteConfig "最小闭环.邮件.提交有效", True, True
+    本轮是否已提交 = True
+    Call 设置任务状态(4, "本轮完成，等待下一次邮件检查")
+    Call 写日志("闭环完成：" & 邮件终态说明 & "；下次执行时间戳=" & 下次邮件时间)
+    ShowMessage "邮件检查完成，已回大厅并记录，等待下一轮"
+End Sub
+
+
+
+// Module: common/scripts/任务分派.mq
+Function 执行指定任务(任务编号)
+    执行指定任务 = 任务失败
+    Select Case 任务编号
+    Case 1
+        执行指定任务 = 执行游戏重连()
+    Case 168
+        执行指定任务 = 执行邮件任务()
+    End Select
+End Function
+
+Sub 恢复未完成任务(失败结果)
+    If 当前任务编号 = 1 Then
+        // 登录只能在统一登录期限耗尽且仍未确认大厅时重启游戏。
+        If Not 登录是否超时() Then
+            Call 提示登录等待("登录尚未超时，继续等待，不重启游戏")
+            Exit Sub
+        End If
+    End If
+    邮件失败次数 = 邮件失败次数 + 1
+    WriteConfig "最小闭环.邮件.失败次数", 邮件失败次数, True
+    WriteConfig "最小闭环.邮件.未完成", True, True
+    WriteConfig "最小闭环.最后失败任务", 当前任务编号, True
+    WriteConfig "最小闭环.最后失败结果", 失败结果, True
+    Call 设置任务状态(6, "未完成，关闭游戏后从入口恢复")
+    Call 写日志("统一恢复；失败结果=" & 失败结果 & "；累计失败=" & 邮件失败次数)
+    ReleaseCapture
+    KillApp 游戏包名
+    Delay 3000
+    登录计时中 = False
+    大厅连续帧 = 0
+    下次邮件时间 = 0
+    // 下一轮先分派重连，再从邮件入口执行；不恢复旧坐标、不递归调用。
+End Sub
+
+
+
+// Module: flows/001_游戏重连/scripts/启动游戏.mq
+Sub 启动游戏()
+    // 已在授权界面时不把游戏强行切回前台，也不关闭QQ。
+    If 正在外部授权() Then
+        Call 提示登录等待("已在外部授权，继续处理授权")
+        Exit Sub
+    End If
+    If 游戏位于前台() Then
+        Exit Sub
+    End If
+    Call 标记操作进展("请求启动游戏")
+    RunApp 游戏包名
+    // RunApp只发起启动；是否真正进入大厅由登录循环判定。
+End Sub
+
+
+// Module: flows/001_游戏重连/scripts/登录游戏.mq
+Function 点击QQ授权坐标(X, Y, 动作名)
+    Dim 前台包名
+    点击QQ授权坐标 = False
+    If 登录是否超时() Then
+        Exit Function
+    End If
+    前台包名 = Sys.GetFront()
+    // 授权图色可在QQ原生页面和游戏内授权网页中出现。
+    If 前台包名 <> 游戏包名 And 前台包名 <> "com.tencent.mobileqq" Then
+        Exit Function
+    End If
+    If X < 0 Or X >= 720 Or Y < 0 Or Y >= 1280 Then
+        Exit Function
+    End If
+    ReleaseCapture
+    Tap X, Y
+    大厅连续帧 = 0
+    上次点击时间 = TickCount()
+    Call 写日志("QQ授权操作：" & 动作名 & "，坐标=" & X & "," & Y)
+    Delay 1000
+    点击QQ授权坐标 = True
+End Function
+
+Function 处理QQ授权()
+    Dim 前台包名, 锚点X, 锚点Y
+    处理QQ授权 = False
+    前台包名 = Sys.GetFront()
+    If 前台包名 <> 游戏包名 And 前台包名 <> "com.tencent.mobileqq" Then
+        Exit Function
+    End If
+    ReleaseCapture
+    // root.793：QQ授权登录、VIP信息确定、同意/拒绝三个分支。
+    If 查找图色("QQ授权登录一") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "授权登录")
+    ElseIf 查找图色("QQ授权登录二") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "授权登录或确认")
+    ElseIf 查找图色("QQ授权确认") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "确认QQ授权信息")
+    ElseIf 查找图色("QQ授权同意") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "同意QQ授权")
+    ElseIf 查找图色("QQ一键登录") Then
+        // root.793：先点(x-151,y+86)，等1秒，再点(x+63,y)。
+        锚点X = 命中X
+        锚点Y = 命中Y
+        If 点击QQ授权坐标(锚点X - 151, 锚点Y + 86, "一键登录协议") Then
+            处理QQ授权 = 点击QQ授权坐标(锚点X + 63, 锚点Y, "QQ一键登录")
+        End If
+    ElseIf 查找图色("QQ旧版授权一") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "QQ授权继续一")
+    ElseIf 查找图色("QQ旧版授权二") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "QQ授权继续二")
+    ElseIf 查找图色("QQ旧版授权三") Then
+        处理QQ授权 = 点击QQ授权坐标(命中X, 命中Y, "QQ授权继续三")
+    End If
+End Function
+
+Function 登录游戏()
+    Dim 协议尝试
+    登录游戏 = 任务超时
+    协议尝试 = 0
+    Call 开始登录计时()
+    Call 开始操作阶段("处理登录、QQ授权与公告")
+    Do
+        // 只有大厅成功或统一期限耗尽才退出；前台切换不返回失败。
+        If 确认当前在大厅() Then
+            登录计时中 = False
+            Call 标记操作进展("登录结束，大厅已确认")
+            登录游戏 = 任务成功
+            Exit Function
+        End If
+        If 登录是否超时() Then
+            Call 写日志("登录到大厅超时，尚未确认主页；交给顶层重启恢复")
+            Exit Function
+        End If
+        If 处理QQ授权() Then
+            Call 提示登录等待("已处理QQ授权按钮，等待页面返回")
+        ElseIf 游戏位于前台() Then
+            If 处理已知弹窗() Then
+                Call 提示登录等待("处理游戏公告和活动弹窗")
+            ElseIf 查找图色("QQ登录页") Then
+                If 查找图色("协议已选") Then
+                    If 点击匹配图色("QQ登录页", "QQ登录") Then
+                        Call 提示登录等待("已点击QQ登录，等待授权")
+                        Delay 1500
+                    End If
+                ElseIf 协议尝试 < 1 Then
+                    If 点击游戏坐标(45, 1150, "勾选QQ登录协议") Then
+                        协议尝试 = 协议尝试 + 1
+                        Delay 1000
+                    End If
+                Else
+                    Call 提示登录等待("等待登录协议选中，尚未到登录超时")
+                End If
+            ElseIf 点击匹配图色("开始游戏", "开始游戏，使用当前已选区服") Then
+                Call 提示登录等待("进入当前区服，等待大厅")
+                Delay 1500
+            ElseIf 识别绿色返回箭头() Then
+                // 不调用受普通操作超时约束的公共返回流程。
+                If 点击游戏坐标(命中X, 命中Y, "登录过程返回主页") Then
+                    Call 提示登录等待("已点击返回，继续等待主页")
+                End If
+            Else
+                Call 提示登录等待("等待游戏加载或页面识别")
+            End If
+        Else
+            // 未识别的授权网页/确认页也等待，不因包名切换而失败。
+            Call 提示登录等待("等待QQ授权或返回游戏，未确认主页")
+        End If
+        Delay 500
+    Loop
+End Function
+
+
+// Module: flows/001_游戏重连/scripts/游戏重连.mq
+Function 执行游戏重连()
+    执行游戏重连 = 任务失败
+    Call 设置任务状态(0, "准备检测游戏")
+    If 等待确认大厅() Then
+        登录计时中 = False
+        执行游戏重连 = 任务成功
+        Exit Function
+    End If
+    Call 开始登录计时()
+    // 启动、加载、QQ授权、确认和回到游戏共用一个登录期限。
+    Call 启动游戏()
+    执行游戏重连 = 登录游戏()
+End Function
+
+
+// Module: flows/168_领邮件奖励/scripts/领邮件奖励.mq
+Function 进入邮件页面()
+    Dim 起点, 入口已点, 上次入口时间
+    进入邮件页面 = 任务失败
+    If Not 等待确认大厅() Then
+        Exit Function
+    End If
+    Call 开始操作阶段("进入邮件页面")
+    起点 = TickCount()
+    入口已点 = 0
+    上次入口时间 = -3000
+    Do
+        If Not 游戏位于前台() Then
+            Exit Function
+        End If
+        If 识别邮件页面() Then
+            Call 标记操作进展("邮件页面已确认")
+            进入邮件页面 = 任务成功
+            Exit Function
+        End If
+        If 处理已知弹窗() Then
+            Call 观察到页面("邮件入口弹窗")
+        ElseIf 点击匹配图色("低客户端提示", "关闭低客户端提示") Then
+            Call 观察到页面("低客户端提示")
+        ElseIf 大厅当前帧成立() And 入口已点 < 3 Then
+            If TickCount() - 上次入口时间 > 2500 Then
+                // V5.510 root.728入口坐标，仅在大厅已确认时使用。
+                If 点击游戏坐标(25, 830, "打开邮件入口") Then
+                    入口已点 = 入口已点 + 1
+                    上次入口时间 = TickCount()
+                End If
+            End If
+        End If
+        If 操作是否超时() Or TickCount() - 起点 > 180000 Then
+            进入邮件页面 = 任务超时
+            Exit Function
+        End If
+        Delay 500
+    Loop
+End Function
+
+Function 领取邮件奖励()
+    Dim 起点, 空状态连续帧, 当前可领, 当前为空, 按钮X, 按钮Y
+    领取邮件奖励 = 任务失败
+    空状态连续帧 = 0
+    起点 = TickCount()
+    Call 开始操作阶段("检查邮件奖励")
+    Do
+        If Not 游戏位于前台() Then
+            Exit Function
+        End If
+        ReleaseCapture
+        KeepCapture
+        当前可领 = 查找图色("邮件可领一")
+        If Not 当前可领 Then
+            当前可领 = 查找图色("邮件可领二")
+        End If
+        按钮X = 命中X + 319
+        按钮Y = 命中Y - 90
+        当前为空 = 查找图色("邮件空一") Or 查找图色("邮件空二")
+        ReleaseCapture
+        If 处理已知弹窗() Then
+            空状态连续帧 = 0
+            Call 观察到页面("邮件奖励弹窗")
+        ElseIf 当前可领 Then
+            空状态连续帧 = 0
+            Call 观察到页面("邮件可领取")
+            // 锚点来自邮件整页多点模板，禁止单独按橙色像素点击。
+            If 点击游戏坐标(按钮X, 按钮Y, "一键领取邮件奖励") Then
+                邮件领取尝试次数 = 邮件领取尝试次数 + 1
+            End If
+        ElseIf 当前为空 Then
+            空状态连续帧 = 空状态连续帧 + 1
+            Call 观察到页面("邮件已无可领取奖励")
+            If 空状态连续帧 >= 2 Then
+                邮件终态已确认 = True
+                If 邮件领取尝试次数 > 0 Then
+                    邮件终态说明 = "已尝试领取，确认无可领取奖励"
+                Else
+                    邮件终态说明 = "本轮检查无可领取奖励"
+                End If
+                领取邮件奖励 = 任务成功
+                Exit Function
+            End If
+        Else
+            空状态连续帧 = 0
+        End If
+        If 操作是否超时() Or TickCount() - 起点 > 180000 Then
+            领取邮件奖励 = 任务超时
+            Exit Function
+        End If
+        Delay 500
+    Loop
+End Function
+
+Function 执行邮件任务()
+    Dim 结果
+    执行邮件任务 = 任务失败
+    Call 开始邮件记录()
+    结果 = 进入邮件页面()
+    If 结果 <> 任务成功 Then
+        执行邮件任务 = 结果
+        Exit Function
+    End If
+    结果 = 领取邮件奖励()
+    If 结果 <> 任务成功 Then
+        执行邮件任务 = 结果
+        Exit Function
+    End If
+    结果 = 返回大厅()
+    If 结果 <> 任务成功 Then
+        执行邮件任务 = 结果
+        Exit Function
+    End If
+    执行邮件任务 = 任务成功
+End Function
+

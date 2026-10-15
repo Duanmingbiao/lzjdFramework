@@ -1,0 +1,51 @@
+﻿Sub 开始操作阶段(阶段)
+    最近页面 = ""
+    Call 标记操作进展(阶段)
+End Sub
+
+Sub 标记操作进展(阶段)
+    当前阶段 = 阶段
+    最后进展时间 = TickCount()
+    Call 写日志(阶段)
+    WriteConfig "最小闭环.当前阶段", 阶段, True
+End Sub
+
+Sub 观察到页面(页面名)
+    If 最近页面 <> 页面名 Then
+        最近页面 = 页面名
+        Call 标记操作进展("识别页面：" & 页面名)
+    End If
+End Sub
+
+Function 操作是否超时()
+    操作是否超时 = TickCount() - 最后进展时间 > 操作超时秒数 * 1000
+End Function
+
+Sub 开始登录计时()
+    // 一个重连周期只起算一次，切换QQ、确认页、游戏都不重新起算。
+    If Not 登录计时中 Then
+        登录计时中 = True
+        登录计时起点 = TickCount()
+        登录等待原因 = ""
+        登录提示时间 = TickCount() - 10000
+        Call 写日志("开始登录计时，直到确认大厅；上限=" & 登录超时秒数 & "秒")
+    End If
+End Sub
+
+Function 登录是否超时()
+    登录是否超时 = False
+    If 登录计时中 Then
+        登录是否超时 = TickCount() - 登录计时起点 >= 登录超时秒数 * 1000
+    End If
+End Function
+
+Sub 提示登录等待(原因)
+    Dim 已用秒数
+    If 原因 <> 登录等待原因 Or TickCount() - 登录提示时间 >= 10000 Then
+        登录等待原因 = 原因
+        登录提示时间 = TickCount()
+        已用秒数 = Int((TickCount() - 登录计时起点) / 1000)
+        Call 写日志(原因 & "；登录已用=" & 已用秒数 & "秒/" & 登录超时秒数 & "秒；前台=" & Sys.GetFront())
+    End If
+End Sub
+

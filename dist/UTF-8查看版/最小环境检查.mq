@@ -1,0 +1,6 @@
+﻿TracePrint "最小环境检查：720x1280"
+TracePrint GetScreenX() & "x" & GetScreenY()
+TracePrint Sys.GetFront()
+ShowMessage "最小环境检查完成，请查看助手日志"
+EndScript
+

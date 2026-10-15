@@ -1,0 +1,14 @@
+﻿Function 游戏是否运行()
+    游戏是否运行 = Sys.IsRunning(游戏包名)
+End Function
+
+Function 游戏位于前台()
+    游戏位于前台 = Sys.AppIsFront(游戏包名)
+End Function
+
+Function 正在外部授权()
+    Dim 前台包名
+    前台包名 = Sys.GetFront()
+    正在外部授权 = 前台包名 = "com.tencent.mobileqq" Or 前台包名 = "com.tencent.mm"
+End Function
+

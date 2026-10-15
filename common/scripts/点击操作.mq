@@ -1,0 +1,29 @@
+﻿Function 点击游戏坐标(X, Y, 动作名)
+    点击游戏坐标 = False
+    If Not 游戏位于前台() Then
+        Exit Function
+    End If
+    If X < 0 Or X >= 720 Or Y < 0 Or Y >= 1280 Then
+        Call 写日志("拒绝越界点击：" & 动作名)
+        Exit Function
+    End If
+    If TickCount() - 上次点击时间 < 800 Then
+        Exit Function
+    End If
+    ReleaseCapture
+    Tap X, Y
+    上次点击时间 = TickCount()
+    大厅连续帧 = 0
+    Call 写日志("尝试点击：" & 动作名 & "，坐标=" & X & "," & Y)
+    // 点击不等于进展；由后续页面改变来重置计时，避免卡住时一直续时。
+    Delay 500
+    点击游戏坐标 = True
+End Function
+
+Function 点击匹配图色(图色名, 动作名)
+    点击匹配图色 = False
+    If 查找图色(图色名) Then
+        点击匹配图色 = 点击游戏坐标(命中X, 命中Y, 动作名)
+    End If
+End Function
+

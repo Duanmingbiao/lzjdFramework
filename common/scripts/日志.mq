@@ -1,0 +1,4 @@
+﻿Sub 写日志(内容)
+    TracePrint Time() & " | 任务=" & 当前任务编号 & " | " & 内容
+End Sub
+

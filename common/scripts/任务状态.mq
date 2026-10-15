@@ -1,0 +1,62 @@
+﻿Sub 读取任务状态()
+    下次邮件时间 = 0
+    邮件失败次数 = ReadConfig("最小闭环.邮件.失败次数", 0)
+    If ReadConfig("最小闭环.邮件.提交有效", False) Then
+        下次邮件时间 = ReadConfig("最小闭环.邮件.下次执行时间", 0)
+    End If
+    If ReadConfig("最小闭环.邮件.未完成", False) Then
+        下次邮件时间 = 0
+        Call 写日志("恢复上次未完成邮件，从任务入口重新执行")
+    End If
+End Sub
+
+Sub 设置任务状态(新状态, 描述)
+    If 当前任务状态 <> 新状态 Then
+        当前任务状态 = 新状态
+        Call 写日志("状态=" & 新状态 & "，" & 描述)
+        WriteConfig "最小闭环.当前任务编号", 当前任务编号, True
+        WriteConfig "最小闭环.当前状态", 新状态, True
+        WriteConfig "最小闭环.当前阶段", 描述, True
+    End If
+End Sub
+
+Sub 开始邮件记录()
+    本轮开始时间 = Time()
+    本轮是否已提交 = False
+    邮件终态已确认 = False
+    邮件终态说明 = ""
+    邮件领取尝试次数 = 0
+    WriteConfig "最小闭环.邮件.未完成", True, True
+    WriteConfig "最小闭环.邮件.最后开始时间", 本轮开始时间, True
+    WriteConfig "最小闭环.邮件.是否启用", True, True
+    Call 设置任务状态(1, "邮件执行中")
+End Sub
+
+Sub 提交邮件完成()
+    Dim 已完成次数
+    // 成功返回值之外再检查终态与大厅，禁止在领取点击后提前提交。
+    If Not 邮件终态已确认 Or 本轮是否已提交 Then
+        Exit Sub
+    End If
+    If Not 等待确认大厅() Then
+        Call 恢复未完成任务(任务失败)
+        Exit Sub
+    End If
+    下次邮件时间 = Time() + 邮件间隔秒数
+    已完成次数 = ReadConfig("最小闭环.邮件.完成轮次", 0) + 1
+    WriteConfig "最小闭环.邮件.提交有效", False, True
+    WriteConfig "最小闭环.邮件.任务编号", 168, True
+    WriteConfig "最小闭环.邮件.所属日期", Date(), True
+    WriteConfig "最小闭环.邮件.最后完成时间", Time(), True
+    WriteConfig "最小闭环.邮件.下次执行时间", 下次邮件时间, True
+    WriteConfig "最小闭环.邮件.完成轮次", 已完成次数, True
+    WriteConfig "最小闭环.邮件.终态", 邮件终态说明, True
+    WriteConfig "最小闭环.邮件.领取尝试次数", 邮件领取尝试次数, True
+    WriteConfig "最小闭环.邮件.未完成", False, True
+    WriteConfig "最小闭环.邮件.提交有效", True, True
+    本轮是否已提交 = True
+    Call 设置任务状态(4, "本轮完成，等待下一次邮件检查")
+    Call 写日志("闭环完成：" & 邮件终态说明 & "；下次执行时间戳=" & 下次邮件时间)
+    ShowMessage "邮件检查完成，已回大厅并记录，等待下一轮"
+End Sub
+

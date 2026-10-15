@@ -1,0 +1,13 @@
+﻿Sub 启动游戏()
+    // 已在授权界面时不把游戏强行切回前台，也不关闭QQ。
+    If 正在外部授权() Then
+        Call 提示登录等待("已在外部授权，继续处理授权")
+        Exit Sub
+    End If
+    If 游戏位于前台() Then
+        Exit Sub
+    End If
+    Call 标记操作进展("请求启动游戏")
+    RunApp 游戏包名
+    // RunApp只发起启动；是否真正进入大厅由登录循环判定。
+End Sub
